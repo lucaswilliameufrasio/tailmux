@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::{Instant, Duration};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
@@ -33,8 +34,14 @@ pub struct SavedState {
     pub sessions: Vec<SavedSession>,
 }
 
+pub struct ConnectionTracker {
+    pub timestamps: Vec<Instant>,
+    pub banned_until: Option<Instant>,
+}
+
 pub struct ServerState {
     pub password: String,
+    pub connection_history: Mutex<HashMap<String, ConnectionTracker>>,
 }
 
 #[derive(Deserialize)]
@@ -80,7 +87,10 @@ pub async fn run_server(bind_addr: SocketAddr, password: String) -> Result<(), a
     }
 
     // 2. Setup server state
-    let server_state = Arc::new(ServerState { password });
+    let server_state = Arc::new(ServerState {
+        password,
+        connection_history: Mutex::new(HashMap::new()),
+    });
 
     // 3. Start a background task to periodically save tmux sessions for reboot persistence
     tokio::spawn(async move {
@@ -118,8 +128,14 @@ pub async fn run_server(bind_addr: SocketAddr, password: String) -> Result<(), a
 
         let tls_acceptor = tls_acceptor.clone();
         let app = app.clone();
+        let state = server_state.clone();
 
         tokio::spawn(async move {
+            let client_ip = remote_addr.ip().to_string();
+            if is_ip_rate_limited(&state, &client_ip).await {
+                return;
+            }
+
             let tls_stream = match tls_acceptor.accept(tcp_stream).await {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -443,4 +459,33 @@ pub async fn restore_sessions() -> Result<(), anyhow::Error> {
 
     let _ = std::fs::remove_file(file_path);
     Ok(())
+}
+
+async fn is_ip_rate_limited(state: &Arc<ServerState>, ip: &str) -> bool {
+    let mut history = state.connection_history.lock().await;
+    let now = Instant::now();
+
+    let tracker = history.entry(ip.to_string()).or_insert_with(|| ConnectionTracker {
+        timestamps: Vec::new(),
+        banned_until: None,
+    });
+
+    if let Some(banned_until) = tracker.banned_until {
+        if now < banned_until {
+            return true;
+        } else {
+            tracker.banned_until = None;
+        }
+    }
+
+    tracker.timestamps.retain(|&t| now.duration_since(t) < Duration::from_secs(10));
+
+    if tracker.timestamps.len() >= 3 {
+        tracker.banned_until = Some(now + Duration::from_secs(300));
+        println!("[Security] IP {} rate limited and banned for 5 minutes.", ip);
+        return true;
+    }
+
+    tracker.timestamps.push(now);
+    false
 }
