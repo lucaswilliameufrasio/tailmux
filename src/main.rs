@@ -17,7 +17,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     match args[1].as_str() {
         "server" => {
-            let mut bind_addr: SocketAddr = "0.0.0.0:7788".parse().unwrap();
+            let mut bind_addr: SocketAddr = "[::]:7788".parse().unwrap();
             let mut password = None;
 
             let mut i = 2;
@@ -132,7 +132,7 @@ fn print_usage() {
     println!("  tailmux client [options]   - Connects to the server");
     println!();
     println!("Server Options:");
-    println!("  --bind <ip:port>        Address to listen on (default: 0.0.0.0:7788)");
+    println!("  --bind <ip:port>        Address to listen on (default: [::]:7788)");
     println!("  --password <password>   Access password (if omitted, a random one will be generated)");
     println!();
     println!("Client Options:");
