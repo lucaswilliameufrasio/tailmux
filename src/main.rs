@@ -1,10 +1,10 @@
 use std::env;
 use std::net::SocketAddr;
 
-mod crypto;
-mod web;
-mod server;
 mod client;
+mod crypto;
+mod server;
+mod web;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -24,9 +24,9 @@ async fn main() -> Result<(), anyhow::Error> {
                 match args[i].as_str() {
                     "--bind" => {
                         if i + 1 < args.len() {
-                            bind_addr = args[i + 1]
-                                .parse()
-                                .map_err(|_| anyhow::anyhow!("Invalid bind address (ex: 0.0.0.0:7788)"))?;
+                            bind_addr = args[i + 1].parse().map_err(|_| {
+                                anyhow::anyhow!("Invalid bind address (ex: 0.0.0.0:7788)")
+                            })?;
                             i += 2;
                         } else {
                             return Err(anyhow::anyhow!("Argument --bind requires a value"));
@@ -66,9 +66,9 @@ async fn main() -> Result<(), anyhow::Error> {
                 match args[i].as_str() {
                     "--connect" => {
                         if i + 1 < args.len() {
-                            connect_addr = args[i + 1]
-                                .parse()
-                                .map_err(|_| anyhow::anyhow!("Invalid connection address (ex: 127.0.0.1:7788)"))?;
+                            connect_addr = args[i + 1].parse().map_err(|_| {
+                                anyhow::anyhow!("Invalid connection address (ex: 127.0.0.1:7788)")
+                            })?;
                             i += 2;
                         } else {
                             return Err(anyhow::anyhow!("Argument --connect requires a value"));
@@ -115,7 +115,9 @@ fn print_usage() {
     println!();
     println!("Server Options:");
     println!("  --bind <ip:port>        Address to listen on (default: [::]:7788)");
-    println!("  --password <password>   Access password (if omitted, a random one will be generated)");
+    println!(
+        "  --password <password>   Access password (if omitted, a random one will be generated)"
+    );
     println!();
     println!("Client Options:");
     println!("  --connect <ip:port>     Address of the server (default: 127.0.0.1:7788)");

@@ -1,9 +1,9 @@
 use axum::{
     extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
+    extract::ConnectInfo,
     response::{Html, IntoResponse},
     routing::get,
     Router,
-    extract::ConnectInfo,
 };
 use futures_util::{SinkExt, StreamExt};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -15,11 +15,11 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::{Instant, Duration};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
-use std::sync::Arc;
 
 use crate::crypto::generate_self_signed_config;
 use crate::web::INDEX_HTML;
@@ -70,10 +70,7 @@ enum ClientCommand {
         rows: Option<u16>,
     },
     #[serde(rename = "resize")]
-    Resize {
-        cols: u16,
-        rows: u16,
-    },
+    Resize { cols: u16, rows: u16 },
     #[serde(rename = "list_sessions")]
     ListSessions,
     #[serde(rename = "attach")]
@@ -85,13 +82,9 @@ enum ClientCommand {
     #[serde(rename = "admin_get_status")]
     AdminGetStatus,
     #[serde(rename = "admin_change_password")]
-    AdminChangePassword {
-        new_password: String,
-    },
+    AdminChangePassword { new_password: String },
     #[serde(rename = "admin_unban_ip")]
-    AdminUnbanIp {
-        ip: String,
-    },
+    AdminUnbanIp { ip: String },
 }
 
 #[derive(Serialize)]
@@ -125,7 +118,8 @@ struct AddConnectInfoService<S> {
     remote_addr: SocketAddr,
 }
 
-impl<S, ReqBody, ResBody> tower_service::Service<hyper::Request<ReqBody>> for AddConnectInfoService<S>
+impl<S, ReqBody, ResBody> tower_service::Service<hyper::Request<ReqBody>>
+    for AddConnectInfoService<S>
 where
     S: tower_service::Service<hyper::Request<ReqBody>, Response = hyper::Response<ResBody>> + Clone,
 {
@@ -133,7 +127,10 @@ where
     type Error = S::Error;
     type Future = S::Future;
 
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
@@ -168,9 +165,10 @@ pub async fn run_server(bind_addr: SocketAddr, password: String) -> Result<(), a
 
     // 4. Setup Axum app
     let state_extractor = server_state.clone();
-    let app = Router::new()
-        .route("/", get(serve_index))
-        .route("/ws", get(move |ws, info| handle_ws_route(ws, info, state_extractor.clone())));
+    let app = Router::new().route("/", get(serve_index)).route(
+        "/ws",
+        get(move |ws, info| handle_ws_route(ws, info, state_extractor.clone())),
+    );
 
     // 5. Setup TLS Acceptor
     let tls_config = generate_self_signed_config()?;
@@ -203,7 +201,10 @@ pub async fn run_server(bind_addr: SocketAddr, password: String) -> Result<(), a
             let tls_stream = match tls_acceptor.accept(tcp_stream).await {
                 Ok(stream) => stream,
                 Err(e) => {
-                    eprintln!("[Server] TLS handshake failed with {}: {:?}", remote_addr, e);
+                    eprintln!(
+                        "[Server] TLS handshake failed with {}: {:?}",
+                        remote_addr, e
+                    );
                     return;
                 }
             };
@@ -248,7 +249,7 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
     let mut pty_master: Option<Arc<Mutex<Box<dyn MasterPty + Send>>>> = None;
     let mut pty_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>> = None;
     let mut client_session_name: Option<String> = None;
-    
+
     // Generate a unique connection ID for the admin panel
     let connection_id = format!("{:x}", rand::thread_rng().gen::<u64>());
 
@@ -261,21 +262,30 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
             return;
         }
     };
-    
+
     let salt: String = (0..16)
         .map(|_| format!("{:02x}", rand::thread_rng().gen::<u8>()))
         .collect();
-    
-    let server_pub_hex: String = server_pub_bytes.iter().map(|b| format!("{:02x}", b)).collect();
-    
+
+    let server_pub_hex: String = server_pub_bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+
     // Send challenge immediately
     let challenge_msg = ServerResponse::AuthChallenge {
         salt: salt.clone(),
         public_key: server_pub_hex,
     };
-    
+
     let challenge_json = serde_json::to_string(&challenge_msg).unwrap();
-    if ws_sender.lock().await.send(AxumMessage::Text(challenge_json.into())).await.is_err() {
+    if ws_sender
+        .lock()
+        .await
+        .send(AxumMessage::Text(challenge_json.into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -297,49 +307,95 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
                 };
 
                 match cmd {
-                    ClientCommand::AuthResponse { public_key, proof, session, cols, rows } => {
+                    ClientCommand::AuthResponse {
+                        public_key,
+                        proof,
+                        session,
+                        cols,
+                        rows,
+                    } => {
                         let client_pub_bytes = match hex_to_bytes(&public_key) {
                             Ok(bytes) => bytes,
                             Err(_) => {
-                                let _ = ws_sender.lock().await.send(AxumMessage::Text(serde_json::to_string(&ServerResponse::AuthFail).unwrap().into())).await;
-                                return;
-                            }
-                        };
-                        
-                        let server_priv = match server_priv_opt.take() {
-                            Some(priv_key) => priv_key,
-                            None => {
-                                // Already consumed or invalid
-                                let _ = ws_sender.lock().await.send(AxumMessage::Text(serde_json::to_string(&ServerResponse::AuthFail).unwrap().into())).await;
+                                let _ = ws_sender
+                                    .lock()
+                                    .await
+                                    .send(AxumMessage::Text(
+                                        serde_json::to_string(&ServerResponse::AuthFail)
+                                            .unwrap()
+                                            .into(),
+                                    ))
+                                    .await;
                                 return;
                             }
                         };
 
-                        let shared_secret = match crate::crypto::derive_shared_secret(server_priv, &client_pub_bytes) {
-                            Ok(secret) => secret,
-                            Err(e) => {
-                                eprintln!("[Server] DH shared secret derivation failed: {:?}", e);
-                                let _ = ws_sender.lock().await.send(AxumMessage::Text(serde_json::to_string(&ServerResponse::AuthFail).unwrap().into())).await;
+                        let server_priv = match server_priv_opt.take() {
+                            Some(priv_key) => priv_key,
+                            None => {
+                                // Already consumed or invalid
+                                let _ = ws_sender
+                                    .lock()
+                                    .await
+                                    .send(AxumMessage::Text(
+                                        serde_json::to_string(&ServerResponse::AuthFail)
+                                            .unwrap()
+                                            .into(),
+                                    ))
+                                    .await;
                                 return;
                             }
                         };
-                        
+
+                        let shared_secret = match crate::crypto::derive_shared_secret(
+                            server_priv,
+                            &client_pub_bytes,
+                        ) {
+                            Ok(secret) => secret,
+                            Err(e) => {
+                                eprintln!("[Server] DH shared secret derivation failed: {:?}", e);
+                                let _ = ws_sender
+                                    .lock()
+                                    .await
+                                    .send(AxumMessage::Text(
+                                        serde_json::to_string(&ServerResponse::AuthFail)
+                                            .unwrap()
+                                            .into(),
+                                    ))
+                                    .await;
+                                return;
+                            }
+                        };
+
                         let client_ip = client_addr.ip().to_string();
                         let pass_matches = {
                             let pass_lock = state.password.lock().await;
-                            let expected_proof = crate::crypto::compute_auth_proof(&*pass_lock, &shared_secret, &salt);
+                            let expected_proof = crate::crypto::compute_auth_proof(
+                                &pass_lock,
+                                &shared_secret,
+                                &salt,
+                            );
                             proof == expected_proof
                         };
 
                         if pass_matches {
                             authenticated = true;
                             record_successful_auth(&state, &client_ip).await;
-                            
-                            // Insert into active connections
-                            state.active_connections.lock().await.insert(connection_id.clone(), client_addr);
 
-                            let response_json = serde_json::to_string(&ServerResponse::AuthOk).unwrap();
-                            let _ = ws_sender.lock().await.send(AxumMessage::Text(response_json.into())).await;
+                            // Insert into active connections
+                            state
+                                .active_connections
+                                .lock()
+                                .await
+                                .insert(connection_id.clone(), client_addr);
+
+                            let response_json =
+                                serde_json::to_string(&ServerResponse::AuthOk).unwrap();
+                            let _ = ws_sender
+                                .lock()
+                                .await
+                                .send(AxumMessage::Text(response_json.into()))
+                                .await;
 
                             if let Some(sess_name) = session {
                                 match attach_client_session(
@@ -347,7 +403,9 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
                                     cols.unwrap_or(80),
                                     rows.unwrap_or(24),
                                     ws_sender.clone(),
-                                ).await {
+                                )
+                                .await
+                                {
                                     Ok((master, writer, client_sess)) => {
                                         pty_master = Some(Arc::new(Mutex::new(master)));
                                         pty_writer = Some(Arc::new(Mutex::new(writer)));
@@ -360,25 +418,44 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
                             }
                         } else {
                             record_failed_auth(&state, &client_ip).await;
-                            let response_json = serde_json::to_string(&ServerResponse::AuthFail).unwrap();
-                            let _ = ws_sender.lock().await.send(AxumMessage::Text(response_json.into())).await;
+                            let response_json =
+                                serde_json::to_string(&ServerResponse::AuthFail).unwrap();
+                            let _ = ws_sender
+                                .lock()
+                                .await
+                                .send(AxumMessage::Text(response_json.into()))
+                                .await;
                             let _ = ws_sender.lock().await.close().await;
                             return;
                         }
                     }
                     ClientCommand::ListSessions => {
-                        if !authenticated { return; }
+                        if !authenticated {
+                            return;
+                        }
                         let sessions = list_base_tmux_sessions();
-                        let response_json = serde_json::to_string(&ServerResponse::SessionsList { sessions }).unwrap();
-                        let _ = ws_sender.lock().await.send(AxumMessage::Text(response_json.into())).await;
+                        let response_json =
+                            serde_json::to_string(&ServerResponse::SessionsList { sessions })
+                                .unwrap();
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(AxumMessage::Text(response_json.into()))
+                            .await;
                     }
-                    ClientCommand::Attach { session, cols, rows } => {
-                        if !authenticated { return; }
-                        
+                    ClientCommand::Attach {
+                        session,
+                        cols,
+                        rows,
+                    } => {
+                        if !authenticated {
+                            return;
+                        }
+
                         // Clean up previous client session if any
                         if let Some(ref prev_sess) = client_session_name {
                             let _ = std::process::Command::new("tmux")
-                                .args(&["kill-session", "-t", prev_sess])
+                                .args(["kill-session", "-t", prev_sess])
                                 .status();
                         }
 
@@ -387,7 +464,9 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
                             cols.unwrap_or(80),
                             rows.unwrap_or(24),
                             ws_sender.clone(),
-                        ).await {
+                        )
+                        .await
+                        {
                             Ok((master, writer, client_sess)) => {
                                 pty_master = Some(Arc::new(Mutex::new(master)));
                                 pty_writer = Some(Arc::new(Mutex::new(writer)));
@@ -399,7 +478,9 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
                         }
                     }
                     ClientCommand::Resize { cols, rows } => {
-                        if !authenticated { return; }
+                        if !authenticated {
+                            return;
+                        }
                         if let Some(ref master) = pty_master {
                             let master_lock = master.lock().await;
                             let _ = master_lock.resize(PtySize {
@@ -411,27 +492,56 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
                         }
                     }
                     ClientCommand::AdminGetStatus => {
-                        if !authenticated { return; }
+                        if !authenticated {
+                            return;
+                        }
                         let status_resp = get_admin_status_response(&state).await;
-                        let _ = ws_sender.lock().await.send(AxumMessage::Text(serde_json::to_string(&status_resp).unwrap().into())).await;
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(AxumMessage::Text(
+                                serde_json::to_string(&status_resp).unwrap().into(),
+                            ))
+                            .await;
                     }
                     ClientCommand::AdminChangePassword { new_password } => {
-                        if !authenticated { return; }
+                        if !authenticated {
+                            return;
+                        }
                         {
                             let mut pass_lock = state.password.lock().await;
                             *pass_lock = new_password.clone();
                         }
                         if let Err(e) = save_persisted_password(&new_password) {
-                            eprintln!("[Server] Failed to save updated password to config: {:?}", e);
+                            eprintln!(
+                                "[Server] Failed to save updated password to config: {:?}",
+                                e
+                            );
                         }
                         println!("[Security] Access password updated via admin panel.");
-                        let _ = ws_sender.lock().await.send(AxumMessage::Text(serde_json::to_string(&ServerResponse::AdminPasswordChanged).unwrap().into())).await;
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(AxumMessage::Text(
+                                serde_json::to_string(&ServerResponse::AdminPasswordChanged)
+                                    .unwrap()
+                                    .into(),
+                            ))
+                            .await;
 
                         let status_resp = get_admin_status_response(&state).await;
-                        let _ = ws_sender.lock().await.send(AxumMessage::Text(serde_json::to_string(&status_resp).unwrap().into())).await;
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(AxumMessage::Text(
+                                serde_json::to_string(&status_resp).unwrap().into(),
+                            ))
+                            .await;
                     }
                     ClientCommand::AdminUnbanIp { ip } => {
-                        if !authenticated { return; }
+                        if !authenticated {
+                            return;
+                        }
                         let mut history = state.connection_history.lock().await;
                         if let Some(tracker) = history.get_mut(&ip) {
                             tracker.banned_until = None;
@@ -440,12 +550,20 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
                         }
 
                         let status_resp = get_admin_status_response(&state).await;
-                        let _ = ws_sender.lock().await.send(AxumMessage::Text(serde_json::to_string(&status_resp).unwrap().into())).await;
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(AxumMessage::Text(
+                                serde_json::to_string(&status_resp).unwrap().into(),
+                            ))
+                            .await;
                     }
                 }
             }
             AxumMessage::Binary(data) => {
-                if !authenticated { continue; }
+                if !authenticated {
+                    continue;
+                }
                 if let Some(ref writer) = pty_writer {
                     let mut writer_lock = writer.lock().await;
                     let _ = writer_lock.write_all(&data);
@@ -459,10 +577,10 @@ async fn handle_ws(socket: WebSocket, client_addr: SocketAddr, state: Arc<Server
     // Connection closed, clean up temporary client session
     if let Some(ref client_sess) = client_session_name {
         let _ = std::process::Command::new("tmux")
-            .args(&["kill-session", "-t", client_sess])
+            .args(["kill-session", "-t", client_sess])
             .status();
     }
-    
+
     // Remove from active connections list
     state.active_connections.lock().await.remove(&connection_id);
 }
@@ -512,13 +630,13 @@ async fn attach_client_session(
 ) -> Result<(Box<dyn MasterPty + Send>, Box<dyn Write + Send>, String), anyhow::Error> {
     // 1. Ensure the base session exists
     let has_session = std::process::Command::new("tmux")
-        .args(&["has-session", "-t", base_name])
+        .args(["has-session", "-t", base_name])
         .status();
 
     if has_session.is_err() || !has_session.unwrap().success() {
         // Create base session in the background
         let _ = std::process::Command::new("tmux")
-            .args(&["new-session", "-d", "-s", base_name])
+            .args(["new-session", "-d", "-s", base_name])
             .status();
     }
 
@@ -564,12 +682,18 @@ async fn attach_client_session(
             .unwrap();
 
         while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             let data = buf[..n].to_vec();
             let sender = ws_sender.clone();
-            
+
             let _ = rt.block_on(async {
-                sender.lock().await.send(AxumMessage::Binary(data.into())).await
+                sender
+                    .lock()
+                    .await
+                    .send(AxumMessage::Binary(data.into()))
+                    .await
             });
         }
     });
@@ -579,7 +703,7 @@ async fn attach_client_session(
 
 fn list_base_tmux_sessions() -> Vec<String> {
     let output = std::process::Command::new("tmux")
-        .args(&["list-sessions", "-F", "#{session_name}"])
+        .args(["list-sessions", "-F", "#{session_name}"])
         .output();
 
     let mut sessions = Vec::new();
@@ -607,7 +731,12 @@ fn get_config_dir() -> PathBuf {
 // Save the base sessions state (tmux layout) to disk
 pub async fn save_sessions_state() -> Result<(), anyhow::Error> {
     let output = std::process::Command::new("tmux")
-        .args(&["list-panes", "-a", "-F", "#{session_name} #{pane_current_path}"])
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name} #{pane_current_path}",
+        ])
         .output();
 
     let output = match output {
@@ -624,14 +753,17 @@ pub async fn save_sessions_state() -> Result<(), anyhow::Error> {
         if parts.len() == 2 {
             let session_name = parts[0].to_string();
             let cwd = parts[1].to_string();
-            
+
             if session_name.contains("_client_") {
                 continue;
             }
 
             if !seen.contains_key(&session_name) {
                 seen.insert(session_name.clone(), true);
-                saved_sessions.push(SavedSession { name: session_name, cwd });
+                saved_sessions.push(SavedSession {
+                    name: session_name,
+                    cwd,
+                });
             }
         }
     }
@@ -645,7 +777,9 @@ pub async fn save_sessions_state() -> Result<(), anyhow::Error> {
     let mut file_path = config_dir;
     file_path.push("sessions.json");
 
-    let state = SavedState { sessions: saved_sessions };
+    let state = SavedState {
+        sessions: saved_sessions,
+    };
     let json = serde_json::to_string_pretty(&state)?;
     std::fs::write(file_path, json)?;
 
@@ -664,10 +798,13 @@ pub async fn restore_sessions() -> Result<(), anyhow::Error> {
     let data = std::fs::read_to_string(&file_path)?;
     let state: SavedState = serde_json::from_str(&data)?;
 
-    println!("[Server] Restoring {} tmux sessions...", state.sessions.len());
+    println!(
+        "[Server] Restoring {} tmux sessions...",
+        state.sessions.len()
+    );
     for sess in state.sessions {
         let _ = std::process::Command::new("tmux")
-            .args(&["new-session", "-d", "-s", &sess.name, "-c", &sess.cwd])
+            .args(["new-session", "-d", "-s", &sess.name, "-c", &sess.cwd])
             .status();
     }
 
@@ -679,10 +816,12 @@ async fn is_ip_banned(state: &Arc<ServerState>, ip: &str) -> bool {
     let mut history = state.connection_history.lock().await;
     let now = Instant::now();
 
-    let tracker = history.entry(ip.to_string()).or_insert_with(|| ConnectionTracker {
-        timestamps: Vec::new(),
-        banned_until: None,
-    });
+    let tracker = history
+        .entry(ip.to_string())
+        .or_insert_with(|| ConnectionTracker {
+            timestamps: Vec::new(),
+            banned_until: None,
+        });
 
     if let Some(banned_until) = tracker.banned_until {
         if now < banned_until {
@@ -698,17 +837,24 @@ async fn record_failed_auth(state: &Arc<ServerState>, ip: &str) {
     let mut history = state.connection_history.lock().await;
     let now = Instant::now();
 
-    let tracker = history.entry(ip.to_string()).or_insert_with(|| ConnectionTracker {
-        timestamps: Vec::new(),
-        banned_until: None,
-    });
+    let tracker = history
+        .entry(ip.to_string())
+        .or_insert_with(|| ConnectionTracker {
+            timestamps: Vec::new(),
+            banned_until: None,
+        });
 
-    tracker.timestamps.retain(|&t| now.duration_since(t) < Duration::from_secs(30));
+    tracker
+        .timestamps
+        .retain(|&t| now.duration_since(t) < Duration::from_secs(30));
     tracker.timestamps.push(now);
 
     if tracker.timestamps.len() >= 5 {
         tracker.banned_until = Some(now + Duration::from_secs(300));
-        println!("[Security] IP {} banned for 5 minutes due to 5 authentication failures in 30 seconds.", ip);
+        println!(
+            "[Security] IP {} banned for 5 minutes due to 5 authentication failures in 30 seconds.",
+            ip
+        );
     }
 }
 
@@ -732,7 +878,9 @@ pub fn load_or_generate_password(provided_password: Option<String>) -> String {
         if let Ok(content) = std::fs::read_to_string(&path) {
             let pwd = content.trim().to_string();
             if !pwd.is_empty() {
-                println!("[Server] Loaded persisted access password from ~/.config/tailmux/password.txt");
+                println!(
+                    "[Server] Loaded persisted access password from ~/.config/tailmux/password.txt"
+                );
                 return pwd;
             }
         }
@@ -772,13 +920,17 @@ pub fn save_persisted_password(password: &str) -> Result<(), anyhow::Error> {
 }
 
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>, anyhow::Error> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(anyhow::anyhow!("Odd length hex string"));
     }
     let mut bytes = Vec::with_capacity(s.len() / 2);
     for chunk in s.as_bytes().chunks(2) {
-        let high = char::from(chunk[0]).to_digit(16).ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
-        let low = char::from(chunk[1]).to_digit(16).ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
+        let high = char::from(chunk[0])
+            .to_digit(16)
+            .ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
+        let low = char::from(chunk[1])
+            .to_digit(16)
+            .ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
         bytes.push((high << 4 | low) as u8);
     }
     Ok(bytes)
@@ -790,7 +942,10 @@ mod tests {
 
     #[test]
     fn test_hex_to_bytes() {
-        assert_eq!(hex_to_bytes("001122aabbff").unwrap(), vec![0x00, 0x11, 0x22, 0xaa, 0xbb, 0xff]);
+        assert_eq!(
+            hex_to_bytes("001122aabbff").unwrap(),
+            vec![0x00, 0x11, 0x22, 0xaa, 0xbb, 0xff]
+        );
         assert_eq!(hex_to_bytes("").unwrap(), Vec::<u8>::new());
         assert!(hex_to_bytes("g").is_err());
         assert!(hex_to_bytes("0").is_err()); // odd length
@@ -824,5 +979,3 @@ mod tests {
         assert!(!is_ip_banned(&state, test_ip).await);
     }
 }
-
-

@@ -1,9 +1,9 @@
-use rustls::ServerConfig;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rcgen::generate_simple_self_signed;
-use ring::agreement::{EphemeralPrivateKey, ECDH_P256, UnparsedPublicKey, agree_ephemeral};
-use ring::rand::SystemRandom;
+use ring::agreement::{agree_ephemeral, EphemeralPrivateKey, UnparsedPublicKey, ECDH_P256};
 use ring::digest::{digest, SHA256};
+use ring::rand::SystemRandom;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::ServerConfig;
 
 pub fn generate_self_signed_config() -> Result<ServerConfig, anyhow::Error> {
     // Install aws-lc-rs as default crypto provider if not already installed
@@ -35,7 +35,8 @@ pub fn generate_ecdh_keypair() -> Result<(EphemeralPrivateKey, Vec<u8>), anyhow:
     let rng = SystemRandom::new();
     let private_key = EphemeralPrivateKey::generate(&ECDH_P256, &rng)
         .map_err(|_| anyhow::anyhow!("Failed to generate ECDH ephemeral private key"))?;
-    let public_key = private_key.compute_public_key()
+    let public_key = private_key
+        .compute_public_key()
         .map_err(|_| anyhow::anyhow!("Failed to compute ECDH public key"))?;
     Ok((private_key, public_key.as_ref().to_vec()))
 }
@@ -84,7 +85,7 @@ mod tests {
         let salt = "random_salt_123";
 
         let proof = compute_auth_proof(password, shared_secret, salt);
-        
+
         // Re-computing with the same inputs should yield the exact same proof
         let proof_recomputed = compute_auth_proof(password, shared_secret, salt);
         assert_eq!(proof, proof_recomputed);
@@ -98,5 +99,3 @@ mod tests {
         assert_ne!(proof, proof_diff_salt);
     }
 }
-
-

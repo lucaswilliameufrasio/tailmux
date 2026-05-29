@@ -76,10 +76,7 @@ enum ClientCommand {
         rows: Option<u16>,
     },
     #[serde(rename = "resize")]
-    Resize {
-        cols: u16,
-        rows: u16,
-    },
+    Resize { cols: u16, rows: u16 },
     #[serde(rename = "list_sessions")]
     ListSessions,
     #[serde(rename = "attach")]
@@ -126,7 +123,7 @@ pub async fn run_client(
         None => {
             print!("Server Password: ");
             stdout().flush()?;
-            
+
             // Read password securely with echo disabled
             let mut pass = String::new();
             enable_raw_mode()?;
@@ -166,13 +163,9 @@ pub async fn run_client(
     let ws_url = format!("wss://{}/ws", server_addr);
 
     println!("[Client] Connecting to {}...", ws_url);
-    let (mut ws_stream, _) = tokio_tungstenite::connect_async_tls_with_config(
-        ws_url,
-        None,
-        false,
-        Some(connector),
-    )
-    .await?;
+    let (mut ws_stream, _) =
+        tokio_tungstenite::connect_async_tls_with_config(ws_url, None, false, Some(connector))
+            .await?;
 
     // Get current terminal size
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -183,17 +176,26 @@ pub async fn run_client(
             let resp: ServerResponse = serde_json::from_str(&text)?;
             match resp {
                 ServerResponse::AuthChallenge { salt, public_key } => (salt, public_key),
-                _ => return Err(anyhow::anyhow!("Expected auth_challenge, got another response")),
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Expected auth_challenge, got another response"
+                    ))
+                }
             }
         }
         _ => {
-            return Err(anyhow::anyhow!("Connection closed by server during challenge phase."));
+            return Err(anyhow::anyhow!(
+                "Connection closed by server during challenge phase."
+            ));
         }
     };
     let (salt, server_pub_hex) = challenge;
 
     let (client_priv, client_pub_bytes) = crate::crypto::generate_ecdh_keypair()?;
-    let client_pub_hex: String = client_pub_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+    let client_pub_hex: String = client_pub_bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
 
     let server_pub_bytes = match hex_to_bytes(&server_pub_hex) {
         Ok(bytes) => bytes,
@@ -221,7 +223,9 @@ pub async fn run_client(
             resp
         }
         _ => {
-            return Err(anyhow::anyhow!("Connection closed by server during authentication response."));
+            return Err(anyhow::anyhow!(
+                "Connection closed by server during authentication response."
+            ));
         }
     };
 
@@ -310,8 +314,7 @@ pub async fn run_client(
                 let mut clean_data = Vec::new();
                 let mut action = DetachAction::Continue;
 
-                for i in 0..n {
-                    let byte = buf[i];
+                for &byte in buf.iter().take(n) {
                     if input_state.ctrl_g_pressed {
                         input_state.ctrl_g_pressed = false;
                         if byte == b'd' || byte == b'D' {
@@ -334,10 +337,10 @@ pub async fn run_client(
                     break;
                 }
 
-                if !clean_data.is_empty() {
-                    if ws_write.send(WsMessage::Binary(clean_data.into())).await.is_err() {
-                        break;
-                    }
+                if !clean_data.is_empty()
+                    && ws_write.send(WsMessage::Binary(clean_data.into())).await.is_err()
+                {
+                    break;
                 }
             }
 
@@ -402,13 +405,15 @@ fn run_tui_selector(sessions: Vec<String>) -> Result<Option<String>, anyhow::Err
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(1)
-                .constraints(
-                    if let TuiMode::NewSessionInput = mode {
-                        vec![Constraint::Min(3), Constraint::Length(3), Constraint::Length(3)]
-                    } else {
-                        vec![Constraint::Min(3), Constraint::Length(3)]
-                    }
-                )
+                .constraints(if let TuiMode::NewSessionInput = mode {
+                    vec![
+                        Constraint::Min(3),
+                        Constraint::Length(3),
+                        Constraint::Length(3),
+                    ]
+                } else {
+                    vec![Constraint::Min(3), Constraint::Length(3)]
+                })
                 .split(f.area());
 
             // 1. Session list block
@@ -437,21 +442,26 @@ fn run_tui_selector(sessions: Vec<String>) -> Result<Option<String>, anyhow::Err
 
             // 2. Input box block (if in input mode)
             if let TuiMode::NewSessionInput = mode {
-                let input_widget = Paragraph::new(new_session_name.as_str())
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(" New Session Name ")
-                            .border_style(Style::default().fg(Color::Rgb(167, 139, 250))),
-                    );
+                let input_widget = Paragraph::new(new_session_name.as_str()).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" New Session Name ")
+                        .border_style(Style::default().fg(Color::Rgb(167, 139, 250))),
+                );
                 f.render_widget(input_widget, chunks[1]);
             }
 
             // 3. Status bar
-            let status_idx = if let TuiMode::NewSessionInput = mode { 2 } else { 1 };
+            let status_idx = if let TuiMode::NewSessionInput = mode {
+                2
+            } else {
+                1
+            };
             let status_text = match mode {
                 TuiMode::Select => " [▲/▼] Navigate  [Enter] Select  [Q/Esc] Quit",
-                TuiMode::NewSessionInput => " Type session name and press [Enter] to create, [Esc] to cancel",
+                TuiMode::NewSessionInput => {
+                    " Type session name and press [Enter] to create, [Esc] to cancel"
+                }
             };
             let status_bar = Paragraph::new(status_text)
                 .block(Block::default().borders(Borders::NONE))
@@ -529,23 +539,23 @@ fn run_tui_selector(sessions: Vec<String>) -> Result<Option<String>, anyhow::Err
     }
 
     disable_raw_mode()?;
-    execute!(
-        stdout(),
-        LeaveAlternateScreen,
-        cursor::Show
-    )?;
+    execute!(stdout(), LeaveAlternateScreen, cursor::Show)?;
 
     Ok(selected_session)
 }
 
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>, anyhow::Error> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(anyhow::anyhow!("Odd length hex string"));
     }
     let mut bytes = Vec::with_capacity(s.len() / 2);
     for chunk in s.as_bytes().chunks(2) {
-        let high = char::from(chunk[0]).to_digit(16).ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
-        let low = char::from(chunk[1]).to_digit(16).ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
+        let high = char::from(chunk[0])
+            .to_digit(16)
+            .ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
+        let low = char::from(chunk[1])
+            .to_digit(16)
+            .ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
         bytes.push((high << 4 | low) as u8);
     }
     Ok(bytes)
