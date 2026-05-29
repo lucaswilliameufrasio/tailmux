@@ -67,9 +67,10 @@ impl ServerCertVerifier for NoOpServerCertVerifier {
 #[derive(Serialize)]
 #[serde(tag = "type")]
 enum ClientCommand {
-    #[serde(rename = "auth")]
-    Auth {
-        password: String,
+    #[serde(rename = "auth_response")]
+    AuthResponse {
+        public_key: String, // hex client public key
+        proof: String,      // hex proof hash
         session: Option<String>,
         cols: Option<u16>,
         rows: Option<u16>,
@@ -92,6 +93,11 @@ enum ClientCommand {
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum ServerResponse {
+    #[serde(rename = "auth_challenge")]
+    AuthChallenge {
+        salt: String,
+        public_key: String, // hex server public key
+    },
     #[serde(rename = "auth_ok")]
     AuthOk,
     #[serde(rename = "auth_fail")]
@@ -172,14 +178,40 @@ pub async fn run_client(
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
 
     // 3. Authenticate
-    let auth_cmd = ClientCommand::Auth {
-        password,
+    let challenge = match ws_stream.next().await {
+        Some(Ok(WsMessage::Text(text))) => {
+            let resp: ServerResponse = serde_json::from_str(&text)?;
+            match resp {
+                ServerResponse::AuthChallenge { salt, public_key } => (salt, public_key),
+                _ => return Err(anyhow::anyhow!("Expected auth_challenge, got another response")),
+            }
+        }
+        _ => {
+            return Err(anyhow::anyhow!("Connection closed by server during challenge phase."));
+        }
+    };
+    let (salt, server_pub_hex) = challenge;
+
+    let (client_priv, client_pub_bytes) = crate::crypto::generate_ecdh_keypair()?;
+    let client_pub_hex: String = client_pub_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+
+    let server_pub_bytes = match hex_to_bytes(&server_pub_hex) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(anyhow::anyhow!("Invalid server public key received")),
+    };
+
+    let shared_secret = crate::crypto::derive_shared_secret(client_priv, &server_pub_bytes)?;
+    let proof = crate::crypto::compute_auth_proof(&password, &shared_secret, &salt);
+
+    let auth_cmd = ClientCommand::AuthResponse {
+        public_key: client_pub_hex,
+        proof,
         session: session.clone(),
         cols: Some(cols),
         rows: Some(rows),
     };
     ws_stream
-        .send(WsMessage::Text(serde_json::to_string(&auth_cmd)?))
+        .send(WsMessage::Text(serde_json::to_string(&auth_cmd)?.into()))
         .await?;
 
     // Wait for auth reply
@@ -189,7 +221,7 @@ pub async fn run_client(
             resp
         }
         _ => {
-            return Err(anyhow::anyhow!("Connection closed by server during authentication."));
+            return Err(anyhow::anyhow!("Connection closed by server during authentication response."));
         }
     };
 
@@ -211,7 +243,7 @@ pub async fn run_client(
             // Request session list
             let list_cmd = ClientCommand::ListSessions;
             ws_stream
-                .send(WsMessage::Text(serde_json::to_string(&list_cmd)?))
+                .send(WsMessage::Text(serde_json::to_string(&list_cmd)?.into()))
                 .await?;
 
             let sessions = match ws_stream.next().await {
@@ -243,7 +275,7 @@ pub async fn run_client(
         rows: Some(rows),
     };
     ws_stream
-        .send(WsMessage::Text(serde_json::to_string(&attach_cmd)?))
+        .send(WsMessage::Text(serde_json::to_string(&attach_cmd)?.into()))
         .await?;
 
     // 5. Raw Terminal Loop
@@ -303,7 +335,7 @@ pub async fn run_client(
                 }
 
                 if !clean_data.is_empty() {
-                    if ws_write.send(WsMessage::Binary(clean_data)).await.is_err() {
+                    if ws_write.send(WsMessage::Binary(clean_data.into())).await.is_err() {
                         break;
                     }
                 }
@@ -332,7 +364,7 @@ pub async fn run_client(
             crossterm_event = event_stream.next() => {
                 if let Some(Ok(Event::Resize(w, h))) = crossterm_event {
                     let resize_cmd = ClientCommand::Resize { cols: w, rows: h };
-                    let _ = ws_write.send(WsMessage::Text(serde_json::to_string(&resize_cmd).unwrap())).await;
+                    let _ = ws_write.send(WsMessage::Text(serde_json::to_string(&resize_cmd).unwrap().into())).await;
                 }
             }
         }
@@ -504,4 +536,17 @@ fn run_tui_selector(sessions: Vec<String>) -> Result<Option<String>, anyhow::Err
     )?;
 
     Ok(selected_session)
+}
+
+fn hex_to_bytes(s: &str) -> Result<Vec<u8>, anyhow::Error> {
+    if s.len() % 2 != 0 {
+        return Err(anyhow::anyhow!("Odd length hex string"));
+    }
+    let mut bytes = Vec::with_capacity(s.len() / 2);
+    for chunk in s.as_bytes().chunks(2) {
+        let high = char::from(chunk[0]).to_digit(16).ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
+        let low = char::from(chunk[1]).to_digit(16).ok_or_else(|| anyhow::anyhow!("Invalid hex char"))?;
+        bytes.push((high << 4 | low) as u8);
+    }
+    Ok(bytes)
 }

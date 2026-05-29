@@ -4,13 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-std", "io-util"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring", "aws_lc_rs"] }
 rustls-pki-types = "1"
 rcgen = "0.13"
-rustls-pemfile = "2.1"
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws"] }
 hyper = { version = "1.4", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
@@ -22,6 +21,9 @@ anyhow = "1.0"
 futures-util = "0.3"
 dirs-next = "2.0"
 portable-pty = "0.9"
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+ring = "0.17"
+tower-service = "0.3"
+
 
 

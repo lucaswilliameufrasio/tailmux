@@ -1,6 +1,5 @@
 use std::env;
 use std::net::SocketAddr;
-use rand::Rng;
 
 mod crypto;
 mod web;
@@ -47,24 +46,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 }
             }
 
-            let password = match password {
-                Some(p) => p,
-                None => {
-                    // Generate random 6 character alphanumeric code
-                    let mut rng = rand::thread_rng();
-                    let code: String = (0..6)
-                        .map(|_| {
-                            let idx = rng.gen_range(0..36);
-                            if idx < 10 {
-                                (b'0' + idx) as char
-                            } else {
-                                (b'A' + (idx - 10)) as char
-                            }
-                        })
-                        .collect();
-                    code
-                }
-            };
+            let password = server::load_or_generate_password(password);
 
             println!("====================================================");
             println!("  TAILMUX SERVER STARTED");

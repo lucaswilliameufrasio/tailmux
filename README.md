@@ -93,3 +93,74 @@ https://<SERVER_IP>:7788/
 1. Click **Advanced** and choose **Proceed/Accept Certificate** (this warning is normal since the server generates its self-signed certificate dynamically in memory).
 2. Input the server's access password.
 3. Your remote terminal is ready for browser interaction!
+
+---
+
+## 🔒 Security Architecture & Authentication
+
+Tailmux implements a hardened security design tailored for exposing terminal sessions on local or private networks (e.g., Tailscale):
+
+1. **Zero-Knowledge Diffie-Hellman Authentication**:
+   - Authentication is performed via an Elliptic Curve Diffie-Hellman (ECDH) key exchange over the P-256 curve (using `ring` in Rust and native Web Crypto APIs in the browser).
+   - The password is never sent in plain text, even over TLS. Instead, both parties compute a shared secret. The client proves knowledge of the password by supplying a SHA-256 hash combination of the password, the shared secret, and an ephemeral server challenge salt.
+   - Eavesdroppers cannot perform offline dictionary attacks to brute-force the password because they do not have the ephemeral ECDH private keys.
+
+2. **Failed-Auth IP Rate Limiter**:
+   - To protect the password from brute-force attempts while preventing false-positive blocks, rate limiting is only triggered by **failed authentication attempts** (not page refreshes or standard TCP connections).
+   - If an IP address fails to authenticate **5 times within a 30-second window**, it is automatically banned for 5 minutes.
+   - Banned IPs can be unbanned in real-time from the web administration panel.
+
+3. **Access Password Persistence**:
+   - The server saves the active password to `~/.config/tailmux/password.txt`.
+   - Modifying the access password inside the Web Admin Panel saves it to disk automatically.
+   - If you want to manually reset the password, edit or delete the `password.txt` file and restart the server.
+
+---
+
+## 🖥️ Running under Systemd
+
+Running Tailmux as a background service ensures it starts automatically on boot and recovers from crashes. Since Tailmux wraps `tmux`, it should run under the user account that owns the active terminal sessions.
+
+### Option A: System-Wide Service (Recommended)
+
+1. Copy the provided `tailmux.service` file to systemd:
+   ```bash
+   sudo cp tailmux.service /etc/systemd/system/tailmux.service
+   ```
+2. Edit `/etc/systemd/system/tailmux.service` to change the `User=` line to match your username and configure the paths:
+   ```ini
+   [Service]
+   User=your_username
+   ExecStart=/home/your_username/.local/bin/tailmux server --bind [::]:7788
+   ```
+3. Reload systemd, enable, and start the daemon:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable tailmux
+   sudo systemctl start tailmux
+   ```
+
+### Option B: User-Level Service (No Root Required)
+
+If you don't have root access or want to run it purely within your user session:
+1. Create the user systemd folder:
+   ```bash
+   mkdir -p ~/.config/systemd/user/
+   ```
+2. Copy `tailmux.service` into it, making sure to remove the `User=` configuration line since user services run under the parent session user:
+   ```bash
+   cp tailmux.service ~/.config/systemd/user/tailmux.service
+   # Remove User= line from the user service file:
+   sed -i '/User=/d' ~/.config/systemd/user/tailmux.service
+   ```
+3. Start and enable the service:
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable tailmux
+   systemctl --user start tailmux
+   ```
+4. To ensure the service continues running after you log out:
+   ```bash
+   sudo loginctl enable-linger $USER
+   ```
+

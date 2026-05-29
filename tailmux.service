@@ -1,0 +1,19 @@
+[Unit]
+Description=Tailmux Secure Remote Terminal Multiplexer Daemon
+After=network.target
+
+[Service]
+Type=simple
+# Since tailmux wraps tmux, it should run under the user account who owns the terminal sessions.
+# Change "lucaseufrasio" to your system username, or run as a systemd user-level unit.
+User=lucaseufrasio
+ExecStart=/usr/local/bin/tailmux server --bind [::]:7788
+Restart=always
+RestartSec=5
+
+# Sandboxing options for security (optional, can be commented out if needed)
+# ProtectSystem=strict
+# ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
