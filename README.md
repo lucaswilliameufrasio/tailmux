@@ -94,6 +94,22 @@ https://<SERVER_IP>:7788/
 2. Input the server's access password.
 3. Your remote terminal is ready for browser interaction!
 
+### 4. Manual Session Save & Restore (No Daemon Required)
+
+Tailmux also allows you to save and restore your active tmux sessions manually without running the server daemon.
+
+- **To save all active tmux sessions**:
+  ```bash
+  ./target/release/tailmux save
+  ```
+  This creates a snapshot of the session names and current working directories (`cwd`) to `~/.config/tailmux/sessions.json`.
+
+- **To restore the saved sessions (e.g. after a reboot)**:
+  ```bash
+  ./target/release/tailmux restore
+  ```
+  This resurrects the saved tmux sessions with their original working directories, and automatically cleans up the JSON snapshot file.
+
 ---
 
 ## 🔒 Security Architecture & Authentication

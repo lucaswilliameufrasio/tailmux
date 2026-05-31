@@ -729,7 +729,7 @@ fn get_config_dir() -> PathBuf {
 }
 
 // Save the base sessions state (tmux layout) to disk
-pub async fn save_sessions_state() -> Result<(), anyhow::Error> {
+pub async fn save_sessions_state() -> Result<Vec<String>, anyhow::Error> {
     let output = std::process::Command::new("tmux")
         .args([
             "list-panes",
@@ -741,7 +741,7 @@ pub async fn save_sessions_state() -> Result<(), anyhow::Error> {
 
     let output = match output {
         Ok(o) if o.status.success() => o,
-        _ => return Ok(()),
+        _ => return Ok(Vec::new()),
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -769,7 +769,7 @@ pub async fn save_sessions_state() -> Result<(), anyhow::Error> {
     }
 
     if saved_sessions.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let config_dir = get_config_dir();
@@ -777,13 +777,15 @@ pub async fn save_sessions_state() -> Result<(), anyhow::Error> {
     let mut file_path = config_dir;
     file_path.push("sessions.json");
 
+    let saved_names: Vec<String> = saved_sessions.iter().map(|s| s.name.clone()).collect();
+
     let state = SavedState {
         sessions: saved_sessions,
     };
     let json = serde_json::to_string_pretty(&state)?;
     std::fs::write(file_path, json)?;
 
-    Ok(())
+    Ok(saved_names)
 }
 
 // Restore saved sessions on startup
