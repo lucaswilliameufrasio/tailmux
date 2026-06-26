@@ -4,6 +4,10 @@ accepted = [
     "Zlib",
     "MPL-2.0",
     "Unicode-3.0",
+    "ISC",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "MIT-0",
 ]
 
 ignore-build-dependencies = true
