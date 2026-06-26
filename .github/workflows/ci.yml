@@ -1,14 +1,26 @@
-on:
-  push:
-    branches: [main, auto, canary]
-  pull_request:
-    branches:
-      - main
-
 name: CI
 
 permissions:
   contents: read
+
+on:
+  push:
+    branches: [main, auto, canary]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'SECURITY.md'
+      - 'LICENSE'
+      - '.github/CODEOWNERS'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'SECURITY.md'
+      - 'LICENSE'
+      - '.github/CODEOWNERS'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -37,18 +49,16 @@ jobs:
         shell: bash
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust 1.94 with lint components
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          key: lint-${{ matrix.os }}
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
       - name: Lint (rustfmt)
         run: cargo fmt --all --check
@@ -80,40 +90,81 @@ jobs:
         shell: bash
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust 1.94
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.94.0
 
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2.9.1
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2
         with:
-          key: build-${{ matrix.os }}
+          tool: cargo-nextest
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
       - name: Build
         run: cargo build --locked --all-targets
 
       - name: Run tests
-        run: cargo test --locked --all-targets
+        run: cargo nextest run --locked --all-targets
+
+      - name: Check branch naming convention
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        shell: bash
+        run: |
+          branch="${{ github.head_ref }}"
+          if [[ "$branch" =~ ^(feature|bugfix)/(issue-[0-9]+[-_a-zA-Z0-9]+|[-_a-zA-Z0-9]+)$ ]] || [[ "$branch" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Branch name '$branch' OK"
+          else
+            echo "::error title=Branch name::Branch '$branch' does not match pattern: <feature|bugfix>/[issue-<number>-]<description>"
+            exit 1
+          fi
+
+      - name: Check CHANGELOG updated
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed="$(git diff --name-only "$base".."$head" | grep -c 'CHANGELOG\.md' || true)"
+          code_changed="$(git diff --name-only "$base".."$head" | grep -cE '\.rs$|Cargo\.toml$|Cargo\.lock$' || true)"
+          if [ "$code_changed" -gt 0 ] && [ "$changed" -eq 0 ]; then
+            echo "::warning title=CHANGELOG::CHANGELOG.md was not updated in this PR."
+          fi
 
   docs:
     name: Build docs
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust 1.94
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.94.0
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          key: docs
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
       - name: Build rustdoc
         run: cargo doc --locked --no-deps
+
+  license-check:
+    name: License compliance
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request || contains(github.event.pull_request.changed_files, 'Cargo.toml') || contains(github.event.pull_request.changed_files, 'Cargo.lock') || contains(github.event.pull_request.changed_files, 'about.toml') || contains(github.event.pull_request.changed_files, 'about.hbs') }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install Rust 1.94
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: 1.94.0
+      - name: Install cargo-about
+        shell: bash
+        run: cargo install cargo-about --locked --features cli 2>&1 | tail -1
+      - name: Validate third-party licenses
+        run: cargo about generate about.hbs -o /dev/null
