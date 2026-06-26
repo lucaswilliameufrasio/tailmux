@@ -98,32 +98,32 @@ async fn main() -> Result<(), anyhow::Error> {
 
             client::run_client(connect_addr, password, session).await?;
         }
-        "save" => {
-            match server::save_sessions_state().await {
-                Ok(sessions) => {
-                    if sessions.is_empty() {
-                        println!("No active tmux sessions found to save.");
-                    } else {
-                        println!("Successfully saved {} session(s): {}", sessions.len(), sessions.join(", "));
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error saving sessions: {:?}", e);
-                    std::process::exit(1);
+        "save" => match server::save_sessions_state().await {
+            Ok(sessions) => {
+                if sessions.is_empty() {
+                    println!("No active tmux sessions found to save.");
+                } else {
+                    println!(
+                        "Successfully saved {} session(s): {}",
+                        sessions.len(),
+                        sessions.join(", ")
+                    );
                 }
             }
-        }
-        "restore" => {
-            match server::restore_sessions().await {
-                Ok(_) => {
-                    println!("Restore completed.");
-                }
-                Err(e) => {
-                    eprintln!("Error restoring sessions: {:?}", e);
-                    std::process::exit(1);
-                }
+            Err(e) => {
+                eprintln!("Error saving sessions: {:?}", e);
+                std::process::exit(1);
             }
-        }
+        },
+        "restore" => match server::restore_sessions().await {
+            Ok(_) => {
+                println!("Restore completed.");
+            }
+            Err(e) => {
+                eprintln!("Error restoring sessions: {:?}", e);
+                std::process::exit(1);
+            }
+        },
         _ => {
             print_usage();
         }
