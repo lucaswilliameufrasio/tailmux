@@ -938,9 +938,100 @@ fn hex_to_bytes(s: &str) -> Result<Vec<u8>, anyhow::Error> {
     Ok(bytes)
 }
 
+pub fn require_tmux() {
+    if !check_tmux_installed() {
+        let os = std::env::consts::OS;
+        eprintln!();
+        eprintln!("Error: tmux is not installed or not found in PATH.");
+        eprintln!();
+        eprintln!("Tailmux requires tmux to manage terminal sessions.");
+        eprintln!("Install it using your system's package manager:");
+        eprintln!();
+        print!("{}", tmux_install_instructions(os));
+        eprintln!("After installing tmux, run tailmux again.");
+        std::process::exit(1);
+    }
+}
+
+fn check_tmux_installed() -> bool {
+    std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn tmux_install_instructions(os: &str) -> String {
+    match os {
+        "linux" => {
+            "\
+  Debian/Ubuntu:  sudo apt install tmux
+  Fedora/RHEL:    sudo dnf install tmux
+  Arch Linux:     sudo pacman -S tmux
+  Alpine:         apk add tmux
+  openSUSE:       sudo zypper install tmux
+"
+        }
+        "macos" => {
+            "\
+  Homebrew:  brew install tmux
+  MacPorts:  sudo port install tmux
+"
+        }
+        "windows" => {
+            "\
+  WSL (Debian/Ubuntu):  sudo apt install tmux
+  Scoop:               scoop install tmux
+  Chocolatey:          choco install tmux
+"
+        }
+        _ => "  Please install tmux using your system's package manager.\n",
+    }
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_tmux_install_instructions_linux() {
+        let msg = tmux_install_instructions("linux");
+        assert!(msg.contains("apt install tmux"));
+        assert!(msg.contains("dnf install tmux"));
+        assert!(msg.contains("pacman -S tmux"));
+        assert!(msg.contains("apk add tmux"));
+        assert!(msg.contains("zypper install tmux"));
+    }
+
+    #[test]
+    fn test_tmux_install_instructions_macos() {
+        let msg = tmux_install_instructions("macos");
+        assert!(msg.contains("brew install tmux"));
+        assert!(msg.contains("port install tmux"));
+    }
+
+    #[test]
+    fn test_tmux_install_instructions_windows() {
+        let msg = tmux_install_instructions("windows");
+        assert!(msg.contains("scoop install tmux"));
+        assert!(msg.contains("choco install tmux"));
+        assert!(msg.contains("apt install tmux"));
+    }
+
+    #[test]
+    fn test_tmux_install_instructions_unknown() {
+        let msg = tmux_install_instructions("freebsd");
+        assert!(msg.contains("package manager"));
+    }
+
+    #[test]
+    fn test_tmux_install_instructions_non_empty() {
+        for os in &["linux", "macos", "windows", "freebsd", ""] {
+            let msg = tmux_install_instructions(os);
+            assert!(!msg.is_empty(), "Empty instructions for OS: {}", os);
+        }
+    }
 
     #[test]
     fn test_hex_to_bytes() {

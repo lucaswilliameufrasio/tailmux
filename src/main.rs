@@ -16,6 +16,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     match args[1].as_str() {
         "server" => {
+            server::require_tmux();
+
             let mut bind_addr: SocketAddr = "[::]:7788".parse().unwrap();
             let mut password = None;
 
@@ -47,6 +49,11 @@ async fn main() -> Result<(), anyhow::Error> {
             }
 
             let password = server::load_or_generate_password(password);
+
+            if env::var("TMUX").is_err() {
+                println!("Note: you are not inside a tmux session. The server will create");
+                println!("      and manage tmux sessions in the background for clients.");
+            }
 
             println!("====================================================");
             println!("  TAILMUX SERVER STARTED");
@@ -98,32 +105,38 @@ async fn main() -> Result<(), anyhow::Error> {
 
             client::run_client(connect_addr, password, session).await?;
         }
-        "save" => match server::save_sessions_state().await {
-            Ok(sessions) => {
-                if sessions.is_empty() {
-                    println!("No active tmux sessions found to save.");
-                } else {
-                    println!(
-                        "Successfully saved {} session(s): {}",
-                        sessions.len(),
-                        sessions.join(", ")
-                    );
+        "save" => {
+            server::require_tmux();
+            match server::save_sessions_state().await {
+                Ok(sessions) => {
+                    if sessions.is_empty() {
+                        println!("No active tmux sessions found to save.");
+                    } else {
+                        println!(
+                            "Successfully saved {} session(s): {}",
+                            sessions.len(),
+                            sessions.join(", ")
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error saving sessions: {:?}", e);
+                    std::process::exit(1);
                 }
             }
-            Err(e) => {
-                eprintln!("Error saving sessions: {:?}", e);
-                std::process::exit(1);
+        }
+        "restore" => {
+            server::require_tmux();
+            match server::restore_sessions().await {
+                Ok(_) => {
+                    println!("Restore completed.");
+                }
+                Err(e) => {
+                    eprintln!("Error restoring sessions: {:?}", e);
+                    std::process::exit(1);
+                }
             }
-        },
-        "restore" => match server::restore_sessions().await {
-            Ok(_) => {
-                println!("Restore completed.");
-            }
-            Err(e) => {
-                eprintln!("Error restoring sessions: {:?}", e);
-                std::process::exit(1);
-            }
-        },
+        }
         _ => {
             print_usage();
         }

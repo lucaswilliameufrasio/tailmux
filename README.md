@@ -27,9 +27,20 @@ Tailmux is particularly designed for:
 
 Ensure you have the Rust toolchain (`cargo`) and `tmux` installed on the host server.
 
-```bash
-sudo apt install tmux  # For Debian/Ubuntu
-```
+Install tmux using your system's package manager:
+
+| Platform | Command |
+|---|---|
+| Debian / Ubuntu | `sudo apt install tmux` |
+| Fedora / RHEL | `sudo dnf install tmux` |
+| Arch Linux | `sudo pacman -S tmux` |
+| Alpine | `apk add tmux` |
+| openSUSE | `sudo zypper install tmux` |
+| macOS (Homebrew) | `brew install tmux` |
+| macOS (MacPorts) | `sudo port install tmux` |
+| Windows (WSL) | `sudo apt install tmux` |
+| Windows (Scoop) | `scoop install tmux` |
+| Windows (Chocolatey) | `choco install tmux` |
 
 ---
 
